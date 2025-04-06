@@ -9,6 +9,19 @@ const nextConfig = {
       allowedOrigins: ['localhost:3000'],
     },
   },
+  webpack: (config) => {
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      '@': '.',
+      '@/components': './components',
+      '@/lib': './lib',
+      '@/types': './types',
+      '@/data': './data',
+      '@/app': './app',
+      '@/public': './public',
+    };
+    return config;
+  },
 };
 
 module.exports = nextConfig;
