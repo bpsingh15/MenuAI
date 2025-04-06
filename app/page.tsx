@@ -1,4 +1,4 @@
-import { RestaurantOrderingSystem } from "@/components/restaurant-ordering-system"
+import { RestaurantOrderingSystem } from "../components/restaurant-ordering-system"
 
 export default function Home() {
   return (
