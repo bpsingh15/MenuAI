@@ -1,14 +1,12 @@
 "use client"
 
-import type React from "react"
-
-import { useState, useRef, useEffect } from "react"
+import React, { useState, useRef, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { X, Send } from "lucide-react"
+import { X, Send, Loader2 } from "lucide-react"
 import type { Order, MenuItem } from "@/types/restaurant"
 import { foodInformation } from "@/data/food-information"
 
@@ -85,7 +83,7 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
     }
     
     // Update messages state immediately
-    setMessages(prev => [...prev, userMessageObj])
+    setMessages((prev: Message[]) => [...prev, userMessageObj])
     
     // Set loading state
     setIsLoading(true)
@@ -355,7 +353,7 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
       role: "assistant",
       content: cleanContent,
     }
-    setMessages((prev) => [...prev, newAiMessage])
+    setMessages((prev: Message[]) => [...prev, newAiMessage])
   }
 
   const generateAIResponse = async (userMessage: string, preferences: {
@@ -1195,9 +1193,9 @@ Instructions:
       <CardContent>
         <ScrollArea ref={scrollAreaRef} className="h-[400px] w-full rounded-md border p-4">
           <div className="space-y-4">
-            {messages.map((message) => (
+            {messages.map((message: Message, index: number) => (
               <div
-                key={message.id}
+                key={index}
                 className={`flex items-start space-x-2 ${
                   message.role === "user" ? "justify-end" : "justify-start"
                 }`}
@@ -1247,7 +1245,7 @@ Instructions:
           <Input
             ref={inputRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInput(e.target.value)}
             placeholder="Ask about your order..."
             disabled={isLoading}
             className="flex-1"

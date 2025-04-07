@@ -1,16 +1,16 @@
 "use client"
 
 import { useState } from "react"
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "../components/ui/card"
-import { Button } from "../components/ui/button"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs"
-import { MenuCategory } from "../components/menu-category"
-import { OrderSummary } from "../components/order-summary"
-import { AIAssistant } from "../components/ai-assistant"
-import { CheckoutPage } from "../components/checkout-page"
-import { OrderSuccess } from "../components/order-success"
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { MenuCategory } from "@/components/menu-category"
+import { OrderSummary } from "@/components/order-summary"
+import { AIAssistant } from "@/components/ai-assistant"
+import { CheckoutPage } from "@/components/checkout-page"
+import { OrderSuccess } from "@/components/order-success"
 import { MessageSquareText } from "lucide-react"
-import type { MenuItem, Order, OrderItem } from "../types/restaurant"
+import type { MenuItem, Order, OrderItem } from "@/types/restaurant"
 
 // Sample menu data with real images
 const menuData: Record<string, MenuItem[]> = {
