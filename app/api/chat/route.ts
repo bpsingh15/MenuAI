@@ -13,61 +13,55 @@ export async function POST(req: Request) {
     const { messages, order, menuData } = await req.json()
     console.log("Request parsed successfully")
 
-    // Create a comprehensive system prompt
-    const systemPrompt = `You are an intelligent AI assistant for a restaurant ordering system. Your role is to help customers with their food orders and provide personalized recommendations.
+    // Ensure messages array exists and has content
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      return NextResponse.json(
+        { error: 'Messages array is required' },
+        { status: 400 }
+      )
+    }
 
-CONTEXT:
-- Current order: ${JSON.stringify(order)}
-- Menu items: ${JSON.stringify(menuData)}
-- All menu items are available in the following categories: ${Object.keys(menuData).join(", ")}
+    // Create a comprehensive system prompt with current context
+    const contextPrompt = `Current Order Context:
+${order.items.length > 0 
+  ? `Current Order: ${order.items.map((item: { quantity: number; name: string }) => `${item.quantity}x ${item.name}`).join(', ')}
+Total Items: ${order.itemCount}
+Order Total: $${order.total.toFixed(2)}`
+  : 'No items in order yet'}
 
-CORE RESPONSIBILITIES:
-1. Answer questions about ingredients, allergens, and dietary restrictions
-2. Provide personalized recommendations based on order size, budget, and preferences
-3. Analyze if the order quantity is appropriate for the number of people
-4. Help customers modify their order (add/remove items)
-5. Provide friendly, helpful, and informative responses
+Available Menu Categories: ${menuData.map((cat: { category: string }) => cat.category).join(', ')}
 
-ORDER QUANTITY GUIDELINES:
-- For 1 person: Recommend 1-2 appetizers, 1 main course, 1-2 sides, and optionally 1 dessert
-- For 2 people: Recommend 1-2 appetizers to share, 1-2 main courses, 2-3 sides, and optionally 1-2 desserts
-- For larger groups: Scale proportionally, considering shared items
+Remember to:
+1. Consider the current order when making suggestions
+2. Be specific about which menu items you're referring to
+3. Use exact item names when suggesting modifications
+4. Consider portion sizes and order balance
+5. Maintain conversation context`
 
-IMPORTANT INSTRUCTIONS:
-1. ONLY use action commands (ADD_ITEM, REMOVE_ITEM, REPLACE_ITEM) when the user EXPLICITLY asks to modify their order (e.g., "add", "remove", "delete", "replace", "change", "update").
-2. For questions, recommendations, or general inquiries, DO NOT use action commands.
-3. Pay close attention when users mention the number of people eating (e.g., "for 2 people", "me and my girlfriend", "family of 4")
-4. When users ask if they're ordering too much or too little food, compare their current order to the guidelines above
-5. Consider dietary preferences, allergies, and budget constraints mentioned by the user
-6. If the order seems too large or too small, explain why and suggest specific adjustments
-7. Always provide clear reasoning for your recommendations
-8. Be proactive in identifying potential issues with the order (e.g., missing main courses, too many appetizers)
-9. When suggesting changes, be specific about which items to add or remove
-10. Handle complex questions with multiple conditions (e.g., "for 2 people, and my girlfriend doesn't eat much")
-11. For dietary questions, analyze the current order against the menu to suggest better alternatives
-12. Always respond to questions regardless of punctuation (?, !, etc.)
-
-Keep your responses concise, friendly, and focused on helping with the order.`
-
-    // Prepare the messages array with the system prompt
+    // Prepare messages array with context
     const apiMessages = [
-      { role: "system", content: systemPrompt },
-      ...messages,
+      messages[0], // System prompt
+      { role: "system", content: contextPrompt },
+      ...messages.slice(1) // Rest of the conversation
     ]
 
-    // Call the OpenAI API with GPT-4
-    console.log("Calling OpenAI API with model: gpt-4")
-    const response = await openai.chat.completions.create({
-      model: "gpt-4",
+    // Call the OpenAI API
+    console.log("Calling OpenAI API with model: gpt-4-turbo-preview")
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4-turbo-preview",
       messages: apiMessages,
       temperature: 0.7,
       max_tokens: 1000,
+      top_p: 1,
+      frequency_penalty: 0,
+      presence_penalty: 0
     })
-    console.log("OpenAI API response received successfully")
 
-    return NextResponse.json({ 
-      content: response.choices[0].message.content 
-    })
+    // Extract and return the response
+    const responseMessage = completion.choices[0].message.content
+
+    return NextResponse.json({ message: responseMessage })
+
   } catch (error) {
     console.error("Error in chat API:", error)
     
@@ -78,7 +72,7 @@ Keep your responses concise, friendly, and focused on helping with the order.`
     }
     
     return NextResponse.json(
-      { error: "Failed to generate response", details: error instanceof Error ? error.message : String(error) },
+      { error: "Error processing your request" },
       { status: 500 }
     )
   }

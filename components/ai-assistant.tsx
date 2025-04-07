@@ -22,7 +22,42 @@ type Message = {
   id: string
   role: "system" | "user" | "assistant"
   content: string
+  hidden?: boolean
 }
+
+// System prompt to guide the AI's behavior
+const SYSTEM_PROMPT = `You are an AI dining assistant helping customers with their restaurant order. You have access to the full menu data, food information, and current order state.
+
+Your role is to:
+1. Help customers explore the menu and make informed decisions
+2. Provide natural, context-aware responses about food items, ingredients, and dietary considerations
+3. Analyze orders to ensure they make sense for the number of people dining
+4. Make personalized recommendations based on preferences and previous choices
+5. Handle order modifications when the user expresses intent to change their order
+
+When responding:
+- Maintain context from the entire conversation history
+- Consider the current order state when making suggestions
+- Be proactive in identifying user intent (e.g., if they ask "is this enough food?" or "should I add dessert?", analyze their order)
+- Use the menu data and food information to provide accurate details
+- Format responses in a conversational, helpful manner
+- Avoid repeating information already discussed unless specifically asked
+- Build upon previous context rather than starting fresh each time
+
+For order modifications:
+- Identify when users express intent to modify their order, even if not explicitly stated
+- When users show interest in modifying their order (e.g., "should I add...", "is that too much..."), analyze the current order and provide contextual recommendations
+- If a modification is needed, return an action marker in this format:
+  ACTION: ADD_ITEM <quantity> <item_name>
+  ACTION: REMOVE_ITEM <item_name>
+  
+Examples of natural intent handling:
+- "should I add dessert?" → Analyze current order, consider number of diners, and suggest accordingly
+- "is that too much for one person?" → Analyze portion sizes and provide specific recommendations
+- "what goes well with my order?" → Consider current items and suggest complementary dishes
+- "any vegetarian options?" → Check dietary info and suggest items that match the restriction
+
+Remember to maintain a friendly, conversational tone while providing accurate, context-aware assistance.`
 
 export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem }: AIAssistantProps) {
   const [messages, setMessages] = useState<Message[]>([])
@@ -39,31 +74,24 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
 
   // Initialize chat with AI greeting
   useEffect(() => {
-    let initialGreeting = "Hi there! I'm your personal dining assistant. "
-    
-    if (order.items.length > 0) {
-      const itemCount = order.items.reduce((sum, item) => sum + item.quantity, 0)
-      initialGreeting += `I see you've added ${itemCount} ${itemCount === 1 ? 'item' : 'items'} to your cart. `
-      initialGreeting += "How many people are you ordering for today? That'll help me make sure you have the perfect amount of food. "
-      initialGreeting += "I can also help with menu recommendations, dietary needs, or answer any questions about our dishes!"
-    } else {
-      initialGreeting += "What kind of food are you in the mood for? I'd love to help you discover our menu and find something perfect for you. "
-      initialGreeting += "Whether you're looking for recommendations, have dietary preferences, or want to know more about any dish, I'm here to help!"
-    }
-
+    const initialGreeting = generateInitialGreeting(order)
     const initialMessages: Message[] = [
       {
         id: "1",
+        role: "system",
+        content: SYSTEM_PROMPT,
+        hidden: true
+      },
+      {
+        id: "2",
         role: "assistant",
         content: initialGreeting,
       },
     ]
     setMessages(initialMessages)
     
-    // Set visible after a short delay to trigger animation
     const timer = setTimeout(() => {
       setIsVisible(true)
-      // Focus the input field
       if (inputRef.current) {
         inputRef.current.focus()
       }
@@ -98,140 +126,37 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
 
   // Process user message and generate AI response
   const processMessage = async (userMessage: string) => {
-    // Add user message to chat
     const userMessageObj: Message = {
       id: Date.now().toString(),
       content: userMessage,
-      role: 'user' as const
+      role: 'user'
     }
     
-    // Update messages state immediately
-    setMessages((prev: Message[]) => [...prev, userMessageObj])
-    
-    // Set loading state
+    setMessages(prev => [...prev, userMessageObj])
     setIsLoading(true)
     
     try {
-      // Extract preferences and constraints from user message
-      const preferences = extractPreferences(userMessage)
-      
-      // If the user is asking about the order quantity or mentioning people count
-      if (userMessage.toLowerCase().includes('enough') || userMessage.toLowerCase().includes('people') || 
-          userMessage.toLowerCase().includes('person') || preferences.peopleCount) {
-        const peopleCount = preferences.peopleCount || 1
-        const response = generateOrderAnalysis(order, peopleCount, preferences.budget || 0, menuData, false)
-        addAIMessage(response)
-        return
+      // Prepare context for the AI
+      const context = {
+        order: {
+          items: order.items,
+          total: order.total
+        },
+        menuData,
+        foodInformation,
+        conversationHistory: messages
       }
+
+      // Call OpenAI API with the context
+      const aiResponse = await generateAIResponse(userMessage, context)
       
-      // Extract multi-item commands from user message
-      const commands = extractMultiItemCommands(userMessage)
-      
-      // If we have commands, process them directly
-      if (commands.length > 0) {
-        console.log('Processing multi-item commands:', commands)
-        
-        // Process each command
-        for (const command of commands) {
-          if (command.type === 'add') {
-            for (const item of command.items) {
-              const menuItem = findItemByName(item.name)
-              if (menuItem) {
-                onAddItem(menuItem)
-              }
-            }
-          } else if (command.type === 'remove') {
-            for (const item of command.items) {
-              const menuItem = findItemByName(item.name)
-              if (menuItem) {
-                onRemoveItem(menuItem.id)
-              }
-            }
-          } else if (command.type === 'replace') {
-            for (const item of command.items) {
-              const menuItem = findItemByName(item.name)
-              if (menuItem) {
-                onRemoveItem(menuItem.id)
-              }
-            }
-            
-            if (command.replaceWith) {
-              const replaceWithItem = findItemByName(command.replaceWith.name)
-              if (replaceWithItem) {
-                onAddItem(replaceWithItem)
-              }
-            }
-          }
-        }
-        
-        // Generate a response based on the commands
-        let response = ''
-        if (commands.length === 1) {
-          const command = commands[0]
-          if (command.type === 'add') {
-            const itemNames = command.items.map(item => `${item.quantity} ${item.name}`).join(', ')
-            response = `I've added ${itemNames} to your order.`
-          } else if (command.type === 'remove') {
-            const itemNames = command.items.map(item => item.name).join(', ')
-            response = `I've removed ${itemNames} from your order.`
-          } else if (command.type === 'replace') {
-            const itemNames = command.items.map(item => item.name).join(', ')
-            const replaceWithName = command.replaceWith ? `${command.replaceWith.quantity} ${command.replaceWith.name}` : ''
-            response = `I've replaced ${itemNames} with ${replaceWithName} in your order.`
-          }
-        } else {
-          // Multiple commands
-          const actions = commands.map(command => {
-            if (command.type === 'add') {
-              const itemNames = command.items.map(item => `${item.quantity} ${item.name}`).join(', ')
-              return `added ${itemNames}`
-            } else if (command.type === 'remove') {
-              const itemNames = command.items.map(item => item.name).join(', ')
-              return `removed ${itemNames}`
-            } else if (command.type === 'replace') {
-              const itemNames = command.items.map(item => item.name).join(', ')
-              const replaceWithName = command.replaceWith ? `${command.replaceWith.quantity} ${command.replaceWith.name}` : ''
-              return `replaced ${itemNames} with ${replaceWithName}`
-            }
-            return ''
-          }).filter(Boolean)
-          
-          response = `I've ${actions.join(' and ')} in your order.`
+      // Process any order modifications if needed
+      if (aiResponse.includes('ACTION:')) {
+        processOrderModifications(aiResponse)
         }
         
         // Add AI response to chat
-        addAIMessage(response)
-      } else {
-        // No commands found, use OpenAI API for natural language processing
-        const aiResponse = await generateAIResponse(userMessage, preferences)
-        
-        // Check if the user is explicitly asking to modify their order
-        const isModifyingOrder = userMessage.toLowerCase().includes('add') || 
-                                userMessage.toLowerCase().includes('remove') || 
-                                userMessage.toLowerCase().includes('delete') || 
-                                userMessage.toLowerCase().includes('replace') || 
-                                userMessage.toLowerCase().includes('change') ||
-                                userMessage.includes('update');
-        
-        // Only process actions if the user is explicitly asking to modify their order
-        if (isModifyingOrder) {
-          // Process any actions indicated by the AI response
-          const actions = processAIActions(aiResponse)
-          
-          // Only add the AI response to messages if it doesn't contain action markers
-          // This prevents duplicate messages when actions are processed
-          if (!aiResponse.includes('ACTION: ADD_ITEM') && 
-              !aiResponse.includes('ACTION: REMOVE_ITEM') && 
-              !aiResponse.includes('ACTION: REPLACE_ITEM')) {
-            addAIMessage(aiResponse)
-          }
-        } else {
-          // For non-modification queries, just add the AI response to the chat
-          addAIMessage(aiResponse)
-        }
-        
-        console.log('Processed AI response:', aiResponse)
-      }
+      addAIMessage(cleanResponse(aiResponse))
     } catch (error) {
       console.error('Error processing message:', error)
       addAIMessage('I encountered an error processing your request. Please try again.')
@@ -240,389 +165,186 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
     }
   }
 
-  // Process any actions indicated by the AI response
-  const processAIActions = (aiResponse: string) => {
-    const actions: {
-      type: 'add' | 'remove' | 'replace',
-      items: { quantity: number, name: string }[],
-      replaceWith?: { quantity: number, name: string }
-    }[] = []
+  // Clean AI response by removing action markers
+  const cleanResponse = (response: string): string => {
+    return response
+      .replace(/ACTION: (ADD|REMOVE|REPLACE)_ITEM[^\n]*/g, '')
+      .replace(/\n\s*\n/g, '\n')
+      .trim()
+  }
+
+  // Process order modifications from AI response
+  const processOrderModifications = (response: string) => {
+    const actions = response.match(/ACTION: (ADD|REMOVE|REPLACE)_ITEM[^\n]*/g) || []
     
-    // Extract add item actions
-    const addItemMatches = aiResponse.matchAll(/ACTION: ADD_ITEM\s+(\d+)\s+(.+?)(?=\n|$)/gi)
-    for (const match of addItemMatches) {
-      const quantity = Number.parseInt(match[1])
-      const name = match[2].trim()
-      actions.push({
-        type: 'add',
-        items: [{ quantity, name }]
-      })
-    }
-    
-    // Extract remove item actions
-    const removeItemMatches = aiResponse.matchAll(/ACTION: REMOVE_ITEM\s+(.+?)(?=\n|$)/gi)
-    for (const match of removeItemMatches) {
-      const name = match[1].trim()
-      actions.push({
-        type: 'remove',
-        items: [{ quantity: 1, name }]
-      })
-    }
-    
-    // Extract replace item actions
-    const replaceItemMatches = aiResponse.matchAll(/ACTION: REPLACE_ITEM\s+(.+?)\s+(.+?)(?=\n|$)/gi)
-    for (const match of replaceItemMatches) {
-      const oldName = match[1].trim()
-      const newName = match[2].trim()
-      actions.push({
-        type: 'replace',
-        items: [{ quantity: 1, name: oldName }],
-        replaceWith: { quantity: 1, name: newName }
-      })
-    }
-    
-    // Process each action
-    for (const action of actions) {
-      if (action.type === 'add') {
-        for (const item of action.items) {
-          const menuItem = findItemByName(item.name)
+    actions.forEach(action => {
+      if (action.includes('ADD_ITEM')) {
+        const match = action.match(/ADD_ITEM (\d+) (.+)/)
+        if (match) {
+          const [_, quantity, itemName] = match
+          const menuItem = findItemByName(itemName)
           if (menuItem) {
+            for (let i = 0; i < parseInt(quantity); i++) {
             onAddItem(menuItem)
           }
         }
-      } else if (action.type === 'remove') {
-        for (const item of action.items) {
-          const menuItem = findItemByName(item.name)
+        }
+      } else if (action.includes('REMOVE_ITEM')) {
+        const match = action.match(/REMOVE_ITEM (.+)/)
+        if (match) {
+          const [_, itemName] = match
+          const menuItem = findItemByName(itemName)
           if (menuItem) {
             onRemoveItem(menuItem.id)
           }
         }
-      } else if (action.type === 'replace') {
-        for (const item of action.items) {
-          const menuItem = findItemByName(item.name)
-          if (menuItem) {
-            onRemoveItem(menuItem.id)
+      }
+    })
+  }
+
+  // Generate AI response using OpenAI API
+  const generateAIResponse = async (
+    userMessage: string,
+    context: {
+      order: { items: Order['items']; total: number }
+      menuData: Record<string, MenuItem[]>
+      foodInformation: typeof foodInformation
+      conversationHistory: Message[]
+    }
+  ): Promise<string> => {
+    try {
+      // Format the menu data for the AI
+      const formattedMenu = Object.entries(context.menuData).map(([category, items]) => ({
+        category,
+        items: items.map(item => ({
+          id: item.id,
+          name: item.name,
+          price: item.price,
+          description: item.description
+        }))
+      }))
+
+      // Format the current order for the AI
+      const formattedOrder = {
+        items: context.order.items.map(item => ({
+          name: item.item.name,
+          quantity: item.quantity,
+          price: item.item.price,
+          total: item.item.price * item.quantity,
+          category: Object.entries(context.menuData).find(([_, items]) => 
+            items.some(menuItem => menuItem.id === item.item.id)
+          )?.[0] || 'unknown'
+        })),
+        total: context.order.total,
+        itemCount: context.order.items.reduce((sum, item) => sum + item.quantity, 0)
+      }
+
+      // Format food information for better context
+      const formattedFoodInfo = Object.entries(context.foodInformation).reduce((acc, [id, info]) => {
+        const menuItem = Object.values(context.menuData)
+          .flat()
+          .find(item => item.id === id)
+        
+        if (menuItem) {
+          acc[menuItem.name] = {
+            ...info,
+            price: menuItem.price,
+            description: menuItem.description
           }
         }
-        
-        if (action.replaceWith) {
-          const replaceWithItem = findItemByName(action.replaceWith.name)
-          if (replaceWithItem) {
-            onAddItem(replaceWithItem)
-          }
-        }
-      }
-    }
-    
-    // Generate a response based on the actions
-    let response = ''
-    if (actions.length === 1) {
-      const action = actions[0]
-      if (action.type === 'add') {
-        const itemNames = action.items.map(item => `${item.quantity} ${item.name}`).join(', ')
-        response = `I've added ${itemNames} to your order.`
-      } else if (action.type === 'remove') {
-        const itemNames = action.items.map(item => item.name).join(', ')
-        response = `I've removed ${itemNames} from your order.`
-      } else if (action.type === 'replace') {
-        const itemNames = action.items.map(item => item.name).join(', ')
-        const replaceWithName = action.replaceWith ? `${action.replaceWith.quantity} ${action.replaceWith.name}` : ''
-        response = `I've replaced ${itemNames} with ${replaceWithName} in your order.`
-      }
-    } else if (actions.length > 1) {
-      // Multiple actions
-      const actionDescriptions = actions.map(action => {
-        if (action.type === 'add') {
-          const itemNames = action.items.map(item => `${item.quantity} ${item.name}`).join(', ')
-          return `added ${itemNames}`
-        } else if (action.type === 'remove') {
-          const itemNames = action.items.map(item => item.name).join(', ')
-          return `removed ${itemNames}`
-        } else if (action.type === 'replace') {
-          const itemNames = action.items.map(item => item.name).join(', ')
-          const replaceWithName = action.replaceWith ? `${action.replaceWith.quantity} ${action.replaceWith.name}` : ''
-          return `replaced ${itemNames} with ${replaceWithName}`
-        }
-        return ''
-      }).filter(Boolean)
-      
-      response = `I've ${actionDescriptions.join(' and ')} in your order.`
-    }
-    
-    // Add the response to the chat if there are actions
-    if (response) {
-      addAIMessage(response)
-    }
-    
-    return actions
-  }
+        return acc
+      }, {} as Record<string, any>)
 
-  const addAIMessage = (content: string) => {
-    // Clean up any action markers from the response
-    let cleanContent = content
-    
-    // Remove any action markers and their associated text
-    cleanContent = cleanContent.replace(/ACTION: ADD_ITEM\s+\d+\s+.+?(?=\n|$)/gi, '')
-    cleanContent = cleanContent.replace(/ACTION: REMOVE_ITEM\s+\d+\s+.+?(?=\n|$)/gi, '')
-    cleanContent = cleanContent.replace(/ACTION: REPLACE_ITEM\s+\d+\s+.+?\s+with\s+\d+\s+.+?(?=\n|$)/gi, '')
-    
-    // Remove any empty lines that might be left after removing action markers
-    cleanContent = cleanContent.replace(/\n\s*\n/g, '\n')
-    
-    // Remove any leading/trailing whitespace
-    cleanContent = cleanContent.trim()
-    
-    // If the content is empty after cleaning, don't add an empty message
-    if (!cleanContent) {
-      return
-    }
-    
-    // Log the cleaned content for debugging
-    console.log("Adding AI message:", cleanContent)
-    
-    const newAiMessage: Message = {
-      id: (Date.now() + 1).toString(),
-      role: "assistant",
-      content: cleanContent,
-    }
-    setMessages((prev: Message[]) => [...prev, newAiMessage])
-  }
-
-  const generateAIResponse = async (userMessage: string, preferences: {
-    peopleCount?: number
-    dietaryRestrictions?: string
-    budget?: number
-    allergies?: string[]
-  }) => {
-    const message = userMessage.toLowerCase()
-    
-    // Check for people count in the message
-    const peopleMatch = message.match(/(\d+)\s*(people|persons?|diners?|guests?)/i)
-    if (peopleMatch && !peopleCount) {
-      const count = parseInt(peopleMatch[1])
-      setPeopleCount(count)
-      return generateOrderAnalysis(order, count, preferences.budget || 0, menuData, false)
-    }
-
-    // Check for dietary restrictions or allergies
-    if (message.includes('allerg') || message.includes('allergic')) {
-      return generateAllergenResponse(message, order, menuData)
-    }
-    if (message.includes('vegetarian') || message.includes('vegan') || message.includes('gluten') || 
-        message.includes('dairy') || message.includes('diet')) {
-      return generateDietaryResponse(message, order, menuData)
-    }
-
-    // Check for ingredient questions
-    if (message.includes('ingredient') || message.includes('what is in') || message.includes('what\'s in')) {
-      return generateIngredientResponse(message, menuData)
-    }
-
-    // Check for recommendations
-    if (message.includes('recommend') || message.includes('suggest') || message.includes('what should') ||
-        message.includes('popular') || message.includes('best')) {
-      return generateRecommendations(order, peopleCount || 2, preferences.budget || 0, menuData)
-    }
-
-    // Default response with menu exploration
-    return `I'd love to help you explore our menu! What interests you most? I can suggest some popular dishes, help you find options within your budget, recommend dishes based on your preferences, or tell you more about any specific dish that catches your eye. Just let me know what you're curious about!`
-  }
-
-  // Extract preferences and constraints from user messages
-  const extractPreferences = (message: string) => {
-    const preferences: {
-      peopleCount?: number
-      dietaryRestrictions?: string
-      budget?: number
-      allergies?: string[]
-    } = {}
-    
-    // Extract number of people
-    const peopleMatch = message.match(/(\d+)\s*(people|person|persons|guests|diners|ppl|individuals|folks|party|group|family|friends)/i)
-    const justNumber = message.match(/^(\d+)$/i)
-    const onePersonMatch = message.match(/one|1\s+person|just me|only me|myself|solo/i)
-    const twoPersonMatch = message.match(/two|2\s+people|couple|date|me and|myself and/i)
-    
-    if (peopleMatch || justNumber) {
-      preferences.peopleCount = Number.parseInt(peopleMatch ? peopleMatch[1] : justNumber![1])
-    } else if (onePersonMatch) {
-      preferences.peopleCount = 1
-    } else if (twoPersonMatch) {
-      preferences.peopleCount = 2
-    }
-    
-    // Extract dietary restrictions
-    const dietaryTerms = [
-      { term: /vegan/i, restriction: "vegan" },
-      { term: /vegetarian/i, restriction: "vegetarian" },
-      { term: /gluten[- ]free/i, restriction: "gluten-free" },
-      { term: /dairy[- ]free/i, restriction: "dairy-free" },
-      { term: /keto/i, restriction: "keto" },
-      { term: /halal/i, restriction: "halal" },
-      { term: /kosher/i, restriction: "kosher" },
-      { term: /low[- ]carb/i, restriction: "low-carb" },
-      { term: /paleo/i, restriction: "paleo" },
-    ]
-    
-    for (const { term, restriction } of dietaryTerms) {
-      if (term.test(message)) {
-        preferences.dietaryRestrictions = restriction
-        break
-      }
-    }
-    
-    // Extract budget
-    const budgetMatch = message.match(/\$?(\d+)/i)
-    if (budgetMatch) {
-      preferences.budget = Number.parseInt(budgetMatch[1])
-    }
-    
-    // Extract allergies
-    const allergyTerms = [
-      { term: /allerg(?:y|ies) to (.+)/i, extract: (match: RegExpMatchArray) => match[1].split(/,|\band\b/).map(s => s.trim()) },
-      { term: /allergic to (.+)/i, extract: (match: RegExpMatchArray) => match[1].split(/,|\band\b/).map(s => s.trim()) },
-      { term: /can't eat (.+)/i, extract: (match: RegExpMatchArray) => match[1].split(/,|\band\b/).map(s => s.trim()) },
-      { term: /cannot eat (.+)/i, extract: (match: RegExpMatchArray) => match[1].split(/,|\band\b/).map(s => s.trim()) },
-    ]
-    
-    for (const { term, extract } of allergyTerms) {
-      const match = message.match(term)
-      if (match) {
-        preferences.allergies = extract(match)
-        break
-      }
-    }
-    
-    return preferences
-  }
-
-  // Extract multi-item commands from user messages
-  const extractMultiItemCommands = (message: string) => {
-    const commands: {
-      type: 'add' | 'remove' | 'replace',
-      items: { quantity: number, name: string }[],
-      replaceWith?: { quantity: number, name: string }
-    }[] = []
-    
-    // Check for add commands
-    const addPatterns = [
-      /add\s+(.+?)(?:\s+to\s+my\s+order)?/i,
-      /can\s+you\s+add\s+(.+?)(?:\s+to\s+my\s+order)?/i,
-      /i\s+want\s+to\s+add\s+(.+?)(?:\s+to\s+my\s+order)?/i,
-      /i\s+would\s+like\s+to\s+add\s+(.+?)(?:\s+to\s+my\s+order)?/i,
-      /please\s+add\s+(.+?)(?:\s+to\s+my\s+order)?/i,
-    ]
-    
-    for (const pattern of addPatterns) {
-      const match = message.match(pattern)
-      if (match) {
-        const itemsText = match[1]
-        const items = parseItemList(itemsText)
-        if (items.length > 0) {
-          commands.push({
-            type: 'add',
-            items
+      // Prepare messages for the API
+      const messages = [
+        { 
+          role: "system", 
+          content: SYSTEM_PROMPT 
+        },
+        {
+          role: "system",
+          content: `Current context:
+Menu Categories: ${Object.keys(context.menuData).join(', ')}
+Order Summary: ${formattedOrder.itemCount} items, Total: $${formattedOrder.total.toFixed(2)}
+Conversation History: ${context.conversationHistory.length - 1} previous messages`
+        },
+        ...context.conversationHistory
+          .filter(msg => msg.role !== "system")
+          .map(msg => ({
+            role: msg.role,
+            content: msg.content
+          })),
+        {
+          role: "system",
+          content: JSON.stringify({
+            currentOrder: formattedOrder,
+            menu: formattedMenu,
+            foodInformation: formattedFoodInfo
           })
+        },
+        { 
+          role: "user", 
+          content: userMessage 
         }
+      ]
+
+      // Make the API call
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ 
+          messages,
+          order: formattedOrder,
+          menuData: formattedMenu
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to get AI response')
       }
+
+      const data = await response.json()
+      return data.message
+
+    } catch (error) {
+      console.error('Error generating AI response:', error)
+      return "I apologize, but I encountered an error processing your request. Could you please try again?"
     }
-    
-    // Check for remove commands
-    const removePatterns = [
-      /remove\s+(.+?)(?:\s+from\s+my\s+order)?/i,
-      /can\s+you\s+remove\s+(.+?)(?:\s+from\s+my\s+order)?/i,
-      /i\s+want\s+to\s+remove\s+(.+?)(?:\s+from\s+my\s+order)?/i,
-      /i\s+would\s+like\s+to\s+remove\s+(.+?)(?:\s+from\s+my\s+order)?/i,
-      /please\s+remove\s+(.+?)(?:\s+from\s+my\s+order)?/i,
-      /take\s+out\s+(.+?)(?:\s+from\s+my\s+order)?/i,
-      /delete\s+(.+?)(?:\s+from\s+my\s+order)?/i,
-    ]
-    
-    for (const pattern of removePatterns) {
-      const match = message.match(pattern)
-      if (match) {
-        const itemsText = match[1]
-        const items = parseItemList(itemsText)
-        if (items.length > 0) {
-          commands.push({
-            type: 'remove',
-            items
-          })
-        }
-      }
-    }
-    
-    // Check for replace commands
-    const replacePatterns = [
-      /replace\s+(.+?)\s+with\s+(.+?)(?:\s+in\s+my\s+order)?/i,
-      /can\s+you\s+replace\s+(.+?)\s+with\s+(.+?)(?:\s+in\s+my\s+order)?/i,
-      /i\s+want\s+to\s+replace\s+(.+?)\s+with\s+(.+?)(?:\s+in\s+my\s+order)?/i,
-      /i\s+would\s+like\s+to\s+replace\s+(.+?)\s+with\s+(.+?)(?:\s+in\s+my\s+order)?/i,
-      /please\s+replace\s+(.+?)\s+with\s+(.+?)(?:\s+in\s+my\s+order)?/i,
-      /swap\s+(.+?)\s+for\s+(.+?)(?:\s+in\s+my\s+order)?/i,
-      /change\s+(.+?)\s+to\s+(.+?)(?:\s+in\s+my\s+order)?/i,
-    ]
-    
-    for (const pattern of replacePatterns) {
-      const match = message.match(pattern)
-      if (match) {
-        const itemsText = match[1]
-        const replaceWithText = match[2]
-        const items = parseItemList(itemsText)
-        const replaceWith = parseItemList(replaceWithText)
-        
-        if (items.length > 0 && replaceWith.length > 0) {
-          commands.push({
-            type: 'replace',
-            items,
-            replaceWith: replaceWith[0] // Just use the first replacement item
-          })
-        }
-      }
-    }
-    
-    return commands
   }
-  
-  // Parse a list of items from a string
-  const parseItemList = (text: string): { quantity: number, name: string }[] => {
-    const items: { quantity: number, name: string }[] = []
-    
-    // Split by common delimiters
-    const parts = text.split(/(?:,|\sand\s|\s&\s|\sor\s)/i)
-    
-    for (const part of parts) {
-      const trimmedPart = part.trim()
-      if (!trimmedPart) continue
-      
-      // Try to extract quantity and name
-      const quantityMatch = trimmedPart.match(/^(\d+)\s+(.+)$/)
-      if (quantityMatch) {
-        const quantity = Number.parseInt(quantityMatch[1])
-        const name = quantityMatch[2].trim()
-        items.push({ quantity, name })
-      } else {
-        // No quantity specified, assume 1
-        items.push({ quantity: 1, name: trimmedPart })
-      }
+
+  // Generate initial greeting based on order state
+  const generateInitialGreeting = (order: Order): string => {
+    if (order.items.length > 0) {
+      const itemCount = order.items.reduce((sum, item) => sum + item.quantity, 0)
+      return `Hi there! I see you've added ${itemCount} ${itemCount === 1 ? 'item' : 'items'} to your cart. How can I help you with your order today?`
     }
-    
-    return items
+    return `Hi there! I'm here to help you explore our menu and find the perfect dishes for you. What kind of food are you in the mood for?`
   }
 
   // Find an item by name (fuzzy match)
   const findItemByName = (name: string): MenuItem | undefined => {
+    const allMenuItems = Object.values(menuData).flat()
     const lowerName = name.toLowerCase()
 
-    // Try exact match first
-    const exactMatch = allMenuItems.find((item) => item.name.toLowerCase() === lowerName)
-
-    if (exactMatch) return exactMatch
-
-    // Try partial match
     return allMenuItems.find(
-      (item) => item.name.toLowerCase().includes(lowerName) || lowerName.includes(item.name.toLowerCase()),
+      item => item.name.toLowerCase() === lowerName ||
+             item.name.toLowerCase().includes(lowerName) ||
+             lowerName.includes(item.name.toLowerCase())
     )
+  }
+
+  // Add AI message to chat
+  const addAIMessage = (content: string) => {
+    if (!content.trim()) return
+    
+    const newAiMessage: Message = {
+      id: (Date.now() + 1).toString(),
+      role: "assistant",
+      content: content,
+    }
+    setMessages(prev => [...prev, newAiMessage])
   }
 
   // Summarize the current order
@@ -762,7 +484,7 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
             // For dietary preferences (vegan, vegetarian, etc.)
             if (info.dietary[dietaryCheck.type as keyof typeof info.dietary]) {
               safeItems.push(orderItem.item.name)
-            } else {
+      } else {
               dietaryIssues.push(orderItem.item.name)
             }
           } else {
@@ -868,7 +590,7 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
           response += `\nHowever, ${safeItems.join(', ')} ${safeItems.length === 1 ? 'is' : 'are'} free from common allergens. `
         }
         response += `\nWould you like me to suggest some allergen-free alternatives for any of these items?`
-        return response
+      return response
       } else if (safeItems.length > 0) {
         return `Good news! All the items in your current order (${safeItems.join(', ')}) are free from common allergens. Would you like to explore more allergen-free options?`
       }
@@ -976,7 +698,7 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
 
     if (order.items.length === 0) {
       response = "Let me suggest some of our most popular dishes that I think you'll love!\n\n"
-    } else {
+      } else {
       response = "Based on what you've ordered, here are some great additions that would complement your meal:\n\n"
     }
 
@@ -1084,20 +806,22 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
             </Avatar>
             AI Food Assistant
           </h3>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onClose}
+        <Button 
+          variant="ghost" 
+          size="icon" 
+          onClick={onClose}
             className="hover:bg-muted"
             aria-label="Close AI Assistant"
-          >
+        >
             <X className="h-5 w-5" />
-          </Button>
+        </Button>
         </div>
         
         <div className="ai-assistant-content" ref={scrollAreaRef}>
           <div className="messages">
-            {messages.map((message) => (
+            {messages
+              .filter(message => !message.hidden)
+              .map((message) => (
               <div
                 key={message.id}
                 className={`${message.role === "user" ? "user-message" : "ai-message"}`}
