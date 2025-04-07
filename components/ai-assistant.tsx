@@ -68,6 +68,7 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
   const inputRef = useRef<HTMLInputElement>(null)
   const [isVisible, setIsVisible] = useState(false)
   const [peopleCount, setPeopleCount] = useState<number | null>(null)
+  const [isInitialized, setIsInitialized] = useState(false)
 
   // Flatten menu data for easier access
   const allMenuItems = Object.values(menuData).flat()
@@ -89,16 +90,26 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
       },
     ]
     setMessages(initialMessages)
+    setIsInitialized(true)
+    setIsVisible(true)
     
-    const timer = setTimeout(() => {
-      setIsVisible(true)
-      if (inputRef.current) {
-        inputRef.current.focus()
+    if (inputRef.current) {
+      inputRef.current.focus()
+    }
+  }, [])
+
+  // Update order context in messages when order changes
+  useEffect(() => {
+    if (isInitialized && order) {
+      const orderUpdateMessage: Message = {
+        id: Date.now().toString(),
+        role: "system",
+        content: JSON.stringify({ orderUpdate: order }),
+        hidden: true
       }
-    }, 100)
-    
-    return () => clearTimeout(timer)
-  }, [order.items.length, order.total])
+      setMessages(prev => [...prev, orderUpdateMessage])
+    }
+  }, [order, isInitialized])
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -144,7 +155,7 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
         },
         menuData,
         foodInformation,
-        conversationHistory: messages
+        conversationHistory: messages.filter(msg => !msg.hidden || msg.role === 'system')
       }
 
       // Call OpenAI API with the context
@@ -152,10 +163,10 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
       
       // Process any order modifications if needed
       if (aiResponse.includes('ACTION:')) {
-        processOrderModifications(aiResponse)
-        }
+        await processOrderModifications(aiResponse)
+      }
         
-        // Add AI response to chat
+      // Add AI response to chat
       addAIMessage(cleanResponse(aiResponse))
     } catch (error) {
       console.error('Error processing message:', error)
@@ -174,10 +185,10 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
   }
 
   // Process order modifications from AI response
-  const processOrderModifications = (response: string) => {
+  const processOrderModifications = async (response: string) => {
     const actions = response.match(/ACTION: (ADD|REMOVE|REPLACE)_ITEM[^\n]*/g) || []
     
-    actions.forEach(action => {
+    for (const action of actions) {
       if (action.includes('ADD_ITEM')) {
         const match = action.match(/ADD_ITEM (\d+) (.+)/)
         if (match) {
@@ -185,9 +196,9 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
           const menuItem = findItemByName(itemName)
           if (menuItem) {
             for (let i = 0; i < parseInt(quantity); i++) {
-            onAddItem(menuItem)
+              await onAddItem(menuItem)
+            }
           }
-        }
         }
       } else if (action.includes('REMOVE_ITEM')) {
         const match = action.match(/REMOVE_ITEM (.+)/)
@@ -195,11 +206,11 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
           const [_, itemName] = match
           const menuItem = findItemByName(itemName)
           if (menuItem) {
-            onRemoveItem(menuItem.id)
+            await onRemoveItem(menuItem.id)
           }
         }
       }
-    })
+    }
   }
 
   // Generate AI response using OpenAI API
