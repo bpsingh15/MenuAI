@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { X, Send, Loader2 } from "lucide-react"
+import { X, Send, Loader2, Bot } from "lucide-react"
 import type { Order, MenuItem } from "@/types/restaurant"
 import { foodInformation } from "@/data/food-information"
 
@@ -32,17 +32,30 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
   const chatContainerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const [isVisible, setIsVisible] = useState(false)
+  const [peopleCount, setPeopleCount] = useState<number | null>(null)
 
   // Flatten menu data for easier access
   const allMenuItems = Object.values(menuData).flat()
 
   // Initialize chat with AI greeting
   useEffect(() => {
+    let initialGreeting = "Hi there! I'm your personal dining assistant. "
+    
+    if (order.items.length > 0) {
+      const itemCount = order.items.reduce((sum, item) => sum + item.quantity, 0)
+      initialGreeting += `I see you've added ${itemCount} ${itemCount === 1 ? 'item' : 'items'} to your cart. `
+      initialGreeting += "How many people are you ordering for today? That'll help me make sure you have the perfect amount of food. "
+      initialGreeting += "I can also help with menu recommendations, dietary needs, or answer any questions about our dishes!"
+    } else {
+      initialGreeting += "What kind of food are you in the mood for? I'd love to help you discover our menu and find something perfect for you. "
+      initialGreeting += "Whether you're looking for recommendations, have dietary preferences, or want to know more about any dish, I'm here to help!"
+    }
+
     const initialMessages: Message[] = [
       {
         id: "1",
         role: "assistant",
-        content: `Hi there! I see you have ${order.items.length} items in your order totaling $${order.total.toFixed(2)}. To help you better, could you tell me how many people this order is for?`,
+        content: initialGreeting,
       },
     ]
     setMessages(initialMessages)
@@ -57,12 +70,22 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
     }, 100)
     
     return () => clearTimeout(timer)
-  }, [])
+  }, [order.items.length, order.total])
 
   // Scroll to bottom when messages change
   useEffect(() => {
     if (scrollAreaRef.current) {
-      scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight
+      const scrollArea = scrollAreaRef.current
+      const shouldScroll = scrollArea.scrollHeight - scrollArea.scrollTop <= scrollArea.clientHeight + 100
+      
+      if (shouldScroll) {
+        setTimeout(() => {
+          scrollArea.scrollTo({
+            top: scrollArea.scrollHeight,
+            behavior: 'smooth'
+          })
+        }, 100)
+      }
     }
   }, [messages])
 
@@ -91,6 +114,15 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
     try {
       // Extract preferences and constraints from user message
       const preferences = extractPreferences(userMessage)
+      
+      // If the user is asking about the order quantity or mentioning people count
+      if (userMessage.toLowerCase().includes('enough') || userMessage.toLowerCase().includes('people') || 
+          userMessage.toLowerCase().includes('person') || preferences.peopleCount) {
+        const peopleCount = preferences.peopleCount || 1
+        const response = generateOrderAnalysis(order, peopleCount, preferences.budget || 0, menuData, false)
+        addAIMessage(response)
+        return
+      }
       
       // Extract multi-item commands from user message
       const commands = extractMultiItemCommands(userMessage)
@@ -362,68 +394,38 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
     budget?: number
     allergies?: string[]
   }) => {
-    try {
-      // Create a system message with context about the order and menu
-      const systemMessage: Message = {
-        id: 'system',
-        role: 'system',
-        content: `You are a helpful AI assistant for a restaurant ordering system. Your role is to help users with their orders and answer questions about the menu.
-
-Current Order:
-${order.items.map(item => `- ${item.quantity}x ${item.item.name}`).join('\n')}
-
-Menu Items:
-${Object.entries(menuData).map(([category, items]) => 
-  `${category}:\n${items.map(item => `- ${item.name} (${item.price})`).join('\n')}`
-).join('\n\n')}
-
-User Preferences:
-${preferences.peopleCount ? `- Number of people: ${preferences.peopleCount}` : ''}
-${preferences.dietaryRestrictions ? `- Dietary restrictions: ${preferences.dietaryRestrictions}` : ''}
-${preferences.budget ? `- Budget: $${preferences.budget}` : ''}
-${preferences.allergies && preferences.allergies.length > 0 ? `- Allergies: ${preferences.allergies.join(', ')}` : ''}
-
-Instructions:
-1. ONLY use action commands (ADD_ITEM, REMOVE_ITEM, REPLACE_ITEM) when the user EXPLICITLY asks to modify their order (e.g., "add", "remove", "delete", "replace", "change", "update").
-2. For questions, recommendations, or general inquiries, DO NOT use action commands.
-3. If the user wants to add items to their order, respond with "ACTION: ADD_ITEM [quantity] [item_name]"
-4. If the user wants to remove items from their order, respond with "ACTION: REMOVE_ITEM [item_name]"
-5. If the user wants to replace an item, respond with "ACTION: REPLACE_ITEM [old_item_name] [new_item_name]"
-6. For multiple items in a single command, generate separate action commands for each item
-7. Do not include any debug messages or markers in your response
-8. Provide a natural, conversational response after the action commands
-9. Consider the user's preferences when making recommendations
-10. If the user asks a question, answer it directly without action commands`
-      }
-      
-      // Create the messages array with the system message and user message
-      const messages = [systemMessage, { id: Date.now().toString(), role: 'user', content: userMessage }]
-      
-      // Call the OpenAI API
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          messages,
-          order,
-          menuData
-        }),
-      })
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        console.error('API error response:', errorData)
-        throw new Error(`Failed to generate AI response: ${response.status} ${response.statusText}${errorData.details ? ` - ${errorData.details}` : ''}`)
-      }
-      
-      const data = await response.json()
-      return data.content
-    } catch (error) {
-      console.error('Error generating AI response:', error)
-      throw error
+    const message = userMessage.toLowerCase()
+    
+    // Check for people count in the message
+    const peopleMatch = message.match(/(\d+)\s*(people|persons?|diners?|guests?)/i)
+    if (peopleMatch && !peopleCount) {
+      const count = parseInt(peopleMatch[1])
+      setPeopleCount(count)
+      return generateOrderAnalysis(order, count, preferences.budget || 0, menuData, false)
     }
+
+    // Check for dietary restrictions or allergies
+    if (message.includes('allerg') || message.includes('allergic')) {
+      return generateAllergenResponse(message, order, menuData)
+    }
+    if (message.includes('vegetarian') || message.includes('vegan') || message.includes('gluten') || 
+        message.includes('dairy') || message.includes('diet')) {
+      return generateDietaryResponse(message, order, menuData)
+    }
+
+    // Check for ingredient questions
+    if (message.includes('ingredient') || message.includes('what is in') || message.includes('what\'s in')) {
+      return generateIngredientResponse(message, menuData)
+    }
+
+    // Check for recommendations
+    if (message.includes('recommend') || message.includes('suggest') || message.includes('what should') ||
+        message.includes('popular') || message.includes('best')) {
+      return generateRecommendations(order, peopleCount || 2, preferences.budget || 0, menuData)
+    }
+
+    // Default response with menu exploration
+    return `I'd love to help you explore our menu! What interests you most? I can suggest some popular dishes, help you find options within your budget, recommend dishes based on your preferences, or tell you more about any specific dish that catches your eye. Just let me know what you're curious about!`
   }
 
   // Extract preferences and constraints from user messages
@@ -661,7 +663,7 @@ Instructions:
       else if (itemId.startsWith("dessert")) categoryCounts.desserts += item.quantity
     })
 
-    // Analyze if order is appropriate for the number of people
+    // Calculate total items and cost per person
     const totalItems = order.items.reduce((sum, item) => sum + item.quantity, 0)
     const costPerPerson = order.total / peopleCount
 
@@ -675,148 +677,50 @@ Instructions:
     // Generate response
     let response = isUpdate
       ? `Here's my analysis of your updated order for ${peopleCount} ${peopleCount === 1 ? "person" : "people"}${budget > 0 ? ` with a budget of $${budget}` : ""}:\n\n`
-      : `Thanks for the information! Let me analyze your order for ${peopleCount} ${peopleCount === 1 ? "person" : "people"}${budget > 0 ? ` with a budget of $${budget}` : ""}.\n\n`
+      : `Thanks for letting me know! Let me take a look at your order for ${peopleCount} ${peopleCount === 1 ? "person" : "people"}.\n\n`
 
-    response += `Your current order has:\n`
+    if (order.items.length === 0) {
+      return "Your cart is empty at the moment. Would you like some recommendations to get started? I can suggest dishes based on your preferences!"
+    }
+
+    response += `You currently have:\n`
     if (categoryCounts.appetizers > 0) response += `- ${categoryCounts.appetizers} appetizer(s)\n`
     if (categoryCounts.mains > 0) response += `- ${categoryCounts.mains} main course(s)\n`
     if (categoryCounts.sides > 0) response += `- ${categoryCounts.sides} side dish(es)\n`
     if (categoryCounts.desserts > 0) response += `- ${categoryCounts.desserts} dessert(s)\n`
 
-    response += `\nTotal cost: $${order.total.toFixed(2)} (about $${costPerPerson.toFixed(2)} per person)\n\n`
+    response += `\nYour total comes to $${order.total.toFixed(2)}, which works out to about $${costPerPerson.toFixed(2)} per person.\n\n`
 
-    // Add analysis
+    // Add analysis in a conversational way
     if (!hasEnoughMains) {
-      response += `⚠️ I notice you have ${categoryCounts.mains} main courses for ${peopleCount} ${peopleCount === 1 ? "person" : "people"}. Usually, each person would have their own main course.\n\n`
+      response += `I notice you have ${categoryCounts.mains} main course${categoryCounts.mains === 1 ? '' : 's'} for ${peopleCount} ${peopleCount === 1 ? "person" : "people"}. Usually, each person might want their own main dish for a complete meal.\n\n`
     }
 
     if (!hasEnoughFood) {
-      response += `⚠️ Your order might not have enough food for ${peopleCount} ${peopleCount === 1 ? "person" : "people"}. I'd recommend adding more items.\n\n`
+      response += `It seems like you might want to add a few more items to ensure everyone has enough to eat. `
     }
 
     if (isOverBudget) {
-      response += `⚠️ Your order total ($${order.total.toFixed(2)}) exceeds your budget of $${budget}.\n\n`
+      response += `Just a heads up - your current total ($${order.total.toFixed(2)}) is a bit over your budget of $${budget}. I can suggest some alternatives if you'd like.\n\n`
     }
 
-    // Add recommendations
-    response += `Recommendations:\n`
+    // Add recommendations in a natural way
+    response += `Here's what I'd suggest:\n`
 
     if (!hasEnoughMains) {
-      response += `- Consider adding ${peopleCount - categoryCounts.mains} more main course(s)\n`
+      response += `• Maybe add ${peopleCount - categoryCounts.mains} more main dish${(peopleCount - categoryCounts.mains) === 1 ? '' : 'es'} so everyone has their own\n`
     }
 
     if (categoryCounts.sides < peopleCount) {
-      response += `- Adding ${peopleCount - categoryCounts.sides} more side dishes would enhance the meal\n`
+      response += `• A few more sides would round out the meal nicely\n`
     }
 
     if (isOverBudget) {
-      response += `- To stay within budget, you might want to remove some items or choose less expensive alternatives\n`
+      response += `• I can help you find some equally delicious options that better fit your budget\n`
     }
 
     if (!isUpdate) {
-      response += `\nFeel free to ask me any questions about your order or let me know if you'd like to add or remove any items! I can also provide information about ingredients, allergens, and dietary restrictions.`
-    }
-
-    return response
-  }
-
-  // Generate allergen response
-  const generateAllergenResponse = (question: string, order: Order, menuData: Record<string, MenuItem[]>): string => {
-    // Check if the question is about a specific item
-    const itemMatch = findItemInQuestion(question, menuData)
-
-    if (itemMatch) {
-      const foodInfo = foodInformation[itemMatch.id]
-      if (foodInfo) {
-        const allergens = []
-        if (foodInfo.allergens.gluten) allergens.push("gluten")
-        if (foodInfo.allergens.dairy) allergens.push("dairy")
-        if (foodInfo.allergens.nuts) allergens.push("nuts")
-        if (foodInfo.allergens.shellfish) allergens.push("shellfish")
-        if (foodInfo.allergens.soy) allergens.push("soy")
-        if (foodInfo.allergens.eggs) allergens.push("eggs")
-
-        if (allergens.length > 0) {
-          return `${itemMatch.name} contains the following allergens: ${allergens.join(", ")}.`
-        } else {
-          return `${itemMatch.name} does not contain any common allergens.`
-        }
-      }
-    }
-
-    // Check if the question is about a specific allergen
-    let allergenType = ""
-    if (question.toLowerCase().includes("gluten")) allergenType = "gluten"
-    else if (question.toLowerCase().includes("dairy")) allergenType = "dairy"
-    else if (question.toLowerCase().includes("nut")) allergenType = "nuts"
-    else if (question.toLowerCase().includes("shellfish")) allergenType = "shellfish"
-    else if (question.toLowerCase().includes("soy")) allergenType = "soy"
-    else if (question.toLowerCase().includes("egg")) allergenType = "eggs"
-
-    if (allergenType) {
-      // Check the order for items with this allergen
-      const itemsWithAllergen = order.items
-        .filter((orderItem) => {
-          const foodInfo = foodInformation[orderItem.item.id]
-          return foodInfo && foodInfo.allergens[allergenType as keyof typeof foodInfo.allergens]
-        })
-        .map((item) => item.item.name)
-
-      if (itemsWithAllergen.length > 0) {
-        return `In your current order, these items contain ${allergenType}: ${itemsWithAllergen.join(", ")}. If you have a severe allergy, please inform your server.`
-      } else {
-        return `Based on the information I have, none of the items in your current order contain ${allergenType}. However, please inform your server about any allergies as kitchen cross-contamination is possible.`
-      }
-    }
-
-    // General allergen information for the entire order
-    const allergenSummary = {
-      gluten: [] as string[],
-      dairy: [] as string[],
-      nuts: [] as string[],
-      shellfish: [] as string[],
-      soy: [] as string[],
-      eggs: [] as string[],
-    }
-
-    order.items.forEach((orderItem) => {
-      const foodInfo = foodInformation[orderItem.item.id]
-      if (foodInfo) {
-        if (foodInfo.allergens.gluten) allergenSummary.gluten.push(orderItem.item.name)
-        if (foodInfo.allergens.dairy) allergenSummary.dairy.push(orderItem.item.name)
-        if (foodInfo.allergens.nuts) allergenSummary.nuts.push(orderItem.item.name)
-        if (foodInfo.allergens.shellfish) allergenSummary.shellfish.push(orderItem.item.name)
-        if (foodInfo.allergens.soy) allergenSummary.soy.push(orderItem.item.name)
-        if (foodInfo.allergens.eggs) allergenSummary.eggs.push(orderItem.item.name)
-      }
-    })
-
-    let response = "Here's an allergen summary for your current order:\n\n"
-
-    if (allergenSummary.gluten.length > 0) {
-      response += `Gluten: ${allergenSummary.gluten.join(", ")}\n`
-    }
-    if (allergenSummary.dairy.length > 0) {
-      response += `Dairy: ${allergenSummary.dairy.join(", ")}\n`
-    }
-    if (allergenSummary.nuts.length > 0) {
-      response += `Nuts: ${allergenSummary.nuts.join(", ")}\n`
-    }
-    if (allergenSummary.shellfish.length > 0) {
-      response += `Shellfish: ${allergenSummary.shellfish.join(", ")}\n`
-    }
-    if (allergenSummary.soy.length > 0) {
-      response += `Soy: ${allergenSummary.soy.join(", ")}\n`
-    }
-    if (allergenSummary.eggs.length > 0) {
-      response += `Eggs: ${allergenSummary.eggs.join(", ")}\n`
-    }
-
-    if (response === "Here's an allergen summary for your current order:\n\n") {
-      response =
-        "Your current order doesn't contain any common allergens. However, please inform your server about any allergies as kitchen cross-contamination is possible."
-    } else {
-      response += "\nPlease inform your server about any allergies as kitchen cross-contamination is possible."
+      response += `\nWhat would you like to know more about? I'm happy to suggest specific dishes, tell you about ingredients, or help modify your order!`
     }
 
     return response
@@ -838,9 +742,9 @@ Instructions:
         if (foodInfo.dietary.kosher) dietaryInfo.push("kosher")
 
         if (dietaryInfo.length > 0) {
-          return `${itemMatch.name} is suitable for the following dietary preferences: ${dietaryInfo.join(", ")}.`
+          return `Great news! The ${itemMatch.name} is ${dietaryInfo.join(" and ")}-friendly. Would you like to know more about its ingredients or nutritional information?`
         } else {
-          return `${itemMatch.name} doesn't meet any of our tracked dietary preferences (vegetarian, vegan, keto, halal, kosher).`
+          return `The ${itemMatch.name} doesn't specifically meet vegetarian, vegan, keto, halal, or kosher requirements. Would you like me to suggest some alternatives that match your dietary preferences?`
         }
       }
     }
@@ -854,86 +758,76 @@ Instructions:
     else if (question.toLowerCase().includes("kosher")) dietType = "kosher"
 
     if (dietType) {
-      // Find items in the order that match this diet
-      const matchingItems = order.items
-        .filter((orderItem) => {
-          const foodInfo = foodInformation[orderItem.item.id]
-          return foodInfo && foodInfo.dietary[dietType as keyof typeof foodInfo.dietary]
+      const suitableItems = allMenuItems.filter(item => {
+        const info = foodInformation[item.id]
+        return info && info.dietary[dietType as keyof typeof info.dietary]
+      })
+
+      if (suitableItems.length > 0) {
+        let response = `Here are some ${dietType} options I think you'll love:\n\n`
+        suitableItems.forEach(item => {
+          response += `• ${item.name} - ${item.description}\n`
         })
-        .map((item) => item.item.name)
-
-      // Find items in the menu that match this diet (for recommendations)
-      const recommendedItems = allMenuItems
-        .filter((item) => {
-          const foodInfo = foodInformation[item.id]
-          return (
-            foodInfo &&
-            foodInfo.dietary[dietType as keyof typeof foodInfo.dietary] &&
-            !order.items.some((orderItem) => orderItem.item.id === item.id)
-          )
-        })
-        .slice(0, 3)
-        .map((item) => item.name)
-
-      let response = ""
-
-      if (matchingItems.length > 0) {
-        response = `These items in your order are ${dietType}: ${matchingItems.join(", ")}.\n\n`
+        response += `\nWould you like to know more about any of these dishes?`
+        return response
       } else {
-        response = `None of the items in your current order are ${dietType}.\n\n`
+        return `I apologize, but I don't see any specifically marked ${dietType} options on our menu. However, I can help you find dishes that might be adaptable to your needs or suggest alternatives. What kind of food do you enjoy?`
       }
-
-      if (recommendedItems.length > 0) {
-        response += `Here are some ${dietType} options from our menu that you might want to consider: ${recommendedItems.join(", ")}.`
-      }
-
-      return response
     }
 
-    // General dietary information for the entire order
-    const dietarySummary = {
-      vegetarian: [] as string[],
-      vegan: [] as string[],
-      keto: [] as string[],
-      halal: [] as string[],
-      kosher: [] as string[],
-    }
+    return `I'd be happy to help you find dishes that match your dietary preferences! Are you looking for vegetarian, vegan, keto, halal, or kosher options? Or do you have other dietary needs I can help with?`
+  }
 
-    order.items.forEach((orderItem) => {
-      const foodInfo = foodInformation[orderItem.item.id]
+  // Generate allergen response
+  const generateAllergenResponse = (question: string, order: Order, menuData: Record<string, MenuItem[]>): string => {
+    // Check if the question is about a specific item
+    const itemMatch = findItemInQuestion(question, menuData)
+
+    if (itemMatch) {
+      const foodInfo = foodInformation[itemMatch.id]
       if (foodInfo) {
-        if (foodInfo.dietary.vegetarian) dietarySummary.vegetarian.push(orderItem.item.name)
-        if (foodInfo.dietary.vegan) dietarySummary.vegan.push(orderItem.item.name)
-        if (foodInfo.dietary.keto) dietarySummary.keto.push(orderItem.item.name)
-        if (foodInfo.dietary.halal) dietarySummary.halal.push(orderItem.item.name)
-        if (foodInfo.dietary.kosher) dietarySummary.kosher.push(orderItem.item.name)
+        const allergens = []
+        if (foodInfo.allergens.gluten) allergens.push("gluten")
+        if (foodInfo.allergens.dairy) allergens.push("dairy")
+        if (foodInfo.allergens.nuts) allergens.push("nuts")
+        if (foodInfo.allergens.shellfish) allergens.push("shellfish")
+        if (foodInfo.allergens.soy) allergens.push("soy")
+        if (foodInfo.allergens.eggs) allergens.push("eggs")
+
+        if (allergens.length > 0) {
+          return `I should let you know that the ${itemMatch.name} contains ${allergens.join(", ")}. Would you like me to suggest some alternative options without these allergens?`
+        } else {
+          return `Good news! The ${itemMatch.name} doesn't contain any common allergens. Would you like to know more about its ingredients?`
+        }
       }
-    })
-
-    let response = "Here's a dietary summary for your current order:\n\n"
-
-    if (dietarySummary.vegetarian.length > 0) {
-      response += `Vegetarian: ${dietarySummary.vegetarian.join(", ")}\n`
-    }
-    if (dietarySummary.vegan.length > 0) {
-      response += `Vegan: ${dietarySummary.vegan.join(", ")}\n`
-    }
-    if (dietarySummary.keto.length > 0) {
-      response += `Keto-friendly: ${dietarySummary.keto.join(", ")}\n`
-    }
-    if (dietarySummary.halal.length > 0) {
-      response += `Halal: ${dietarySummary.halal.join(", ")}\n`
-    }
-    if (dietarySummary.kosher.length > 0) {
-      response += `Kosher: ${dietarySummary.kosher.join(", ")}\n`
     }
 
-    if (response === "Here's a dietary summary for your current order:\n\n") {
-      response =
-        "I don't see any items in your order that match our tracked dietary preferences. Would you like me to recommend some options?"
+    // Check if the question is about a specific allergen
+    let allergenType = ""
+    if (question.toLowerCase().includes("gluten")) allergenType = "gluten"
+    else if (question.toLowerCase().includes("dairy")) allergenType = "dairy"
+    else if (question.toLowerCase().includes("nut")) allergenType = "nuts"
+    else if (question.toLowerCase().includes("shellfish")) allergenType = "shellfish"
+    else if (question.toLowerCase().includes("soy")) allergenType = "soy"
+    else if (question.toLowerCase().includes("egg")) allergenType = "eggs"
+
+    if (allergenType) {
+      const safeItems = allMenuItems.filter(item => {
+        const info = foodInformation[item.id]
+        return info && !info.allergens[allergenType as keyof typeof info.allergens]
+      })
+
+      if (safeItems.length > 0) {
+        let response = `Here are some delicious options that are ${allergenType}-free:\n\n`
+        safeItems.forEach(item => {
+          response += `• ${item.name} - ${item.description}\n`
+        })
+        response += `\nWould you like me to tell you more about any of these dishes?`
+        return response
+      }
     }
 
-    return response
+    return `I want to make sure you have a safe dining experience! Could you tell me which allergens you need to avoid? I can help you find dishes that are free from common allergens like gluten, dairy, nuts, shellfish, soy, or eggs.`
   }
 
   // Generate ingredient response
@@ -943,13 +837,15 @@ Instructions:
     if (itemMatch) {
       const foodInfo = foodInformation[itemMatch.id]
       if (foodInfo && foodInfo.ingredients.length > 0) {
-        return `${itemMatch.name} contains the following ingredients: ${foodInfo.ingredients.join(", ")}.`
+        let response = `The ${itemMatch.name} is made with ${foodInfo.ingredients.join(", ")}. `
+        response += `Would you like to know about any allergens or dietary information for this dish?`
+        return response
       } else {
-        return `I'm sorry, I don't have detailed ingredient information for ${itemMatch.name}.`
+        return `I'd love to tell you more about the ${itemMatch.name}, but I don't have the detailed ingredient list at hand. Is there something specific you'd like to know about it? I can tell you about its taste, portion size, or suggest similar dishes!`
       }
     }
 
-    return "Please specify which dish you'd like to know the ingredients for. For example, you can ask 'What's in the Mozzarella Sticks?' or 'What are the ingredients in the Grilled Salmon?'"
+    return `I'd be happy to tell you about any dish's ingredients! Which item are you curious about?`
   }
 
   // Find an item mentioned in a question
@@ -963,7 +859,7 @@ Instructions:
       }
     }
 
-    // Try partial matches
+    // Try partial matches for more natural language understanding
     for (const item of allMenuItems) {
       const words = item.name.toLowerCase().split(" ")
       for (const word of words) {
@@ -977,110 +873,41 @@ Instructions:
   }
 
   // Generate recommendations
-  const generateRecommendations = (
-    order: Order,
-    peopleCount: number,
-    budget: number,
-    menuData: Record<string, MenuItem[]>,
-  ): string => {
-    // Get current order items
-    const currentItemIds = order.items.map((item) => item.item.id)
-
-    // Calculate remaining budget if applicable
+  const generateRecommendations = (order: Order, peopleCount: number, budget: number, menuData: Record<string, MenuItem[]>): string => {
     const remainingBudget = budget > 0 ? budget - order.total : 0
+    const perPersonBudget = remainingBudget > 0 ? remainingBudget / peopleCount : 0
 
-    // Generate recommendations based on what's missing
-    let response = "Based on your current order, here are some recommendations:\n\n"
+    // Get items not in the current order
+    const availableItems = allMenuItems.filter(
+      item => !order.items.some(orderItem => orderItem.item.id === item.id)
+    )
 
-    // Check if there are enough main courses
-    const mainCourses = order.items.filter((item) => item.item.id.startsWith("main"))
-    const mainCoursesCount = mainCourses.reduce((sum, item) => sum + item.quantity, 0)
+    // Sort by popularity (you could add a popularity field to items)
+    const popularItems = availableItems
+      .filter(item => item.price <= perPersonBudget || budget === 0)
+      .slice(0, 5)
 
-    if (mainCoursesCount < peopleCount) {
-      response += "Main Courses:\n"
-      const recommendedMains = menuData.mains
-        .filter((item) => !currentItemIds.includes(item.id))
-        .filter((item) => budget <= 0 || item.price <= remainingBudget)
-        .slice(0, 2)
+    let response = ""
 
-      if (recommendedMains.length > 0) {
-        recommendedMains.forEach((item) => {
-          response += `- ${item.name} ($${item.price.toFixed(2)}) - ${item.description}\n`
-        })
+    if (order.items.length === 0) {
+      response = "Let me suggest some of our most popular dishes that I think you'll love!\n\n"
+    } else {
+      response = "Based on what you've ordered, here are some great additions that would complement your meal:\n\n"
+    }
+
+    popularItems.forEach(item => {
+      response += `• ${item.name} ($${item.price.toFixed(2)}) - ${item.description}\n`
+    })
+
+    if (budget > 0) {
+      if (remainingBudget > 0) {
+        response += `\nThese suggestions fit within your remaining budget of $${remainingBudget.toFixed(2)} (about $${perPersonBudget.toFixed(2)} per person).`
       } else {
-        response += "- You might want to add more main courses for your party\n"
+        response += `\nJust a heads up - you've reached your budget of $${budget.toFixed(2)}. Would you like to see some more affordable alternatives?`
       }
-      response += "\n"
     }
 
-    // Check if there are sides
-    const sides = order.items.filter((item) => item.item.id.startsWith("side"))
-    const sidesCount = sides.reduce((sum, item) => sum + item.quantity, 0)
-
-    if (sidesCount < Math.ceil(peopleCount / 2)) {
-      response += "Side Dishes:\n"
-      const recommendedSides = menuData.sides
-        .filter((item) => !currentItemIds.includes(item.id))
-        .filter((item) => budget <= 0 || item.price <= remainingBudget)
-        .slice(0, 2)
-
-      if (recommendedSides.length > 0) {
-        recommendedSides.forEach((item) => {
-          response += `- ${item.name} ($${item.price.toFixed(2)}) - ${item.description}\n`
-        })
-      } else {
-        response += "- Consider adding some side dishes to complement your meal\n"
-      }
-      response += "\n"
-    }
-
-    // Check if there are appetizers for sharing
-    const appetizers = order.items.filter((item) => item.item.id.startsWith("app"))
-    const appetizersCount = appetizers.reduce((sum, item) => sum + item.quantity, 0)
-
-    if (appetizersCount < Math.ceil(peopleCount / 3)) {
-      response += "Appetizers for sharing:\n"
-      const recommendedApps = menuData.appetizers
-        .filter((item) => !currentItemIds.includes(item.id))
-        .filter((item) => budget <= 0 || item.price <= remainingBudget)
-        .slice(0, 2)
-
-      if (recommendedApps.length > 0) {
-        recommendedApps.forEach((item) => {
-          response += `- ${item.name} ($${item.price.toFixed(2)}) - ${item.description}\n`
-        })
-      } else {
-        response += "- Shared appetizers would be a nice addition to your meal\n"
-      }
-      response += "\n"
-    }
-
-    if (budget > 0 && order.total > budget) {
-      response += "Budget-Friendly Alternatives:\n"
-      // Find less expensive alternatives to current items
-      order.items.forEach((orderItem) => {
-        const category = orderItem.item.id.startsWith("app")
-          ? "appetizers"
-          : orderItem.item.id.startsWith("main")
-            ? "mains"
-            : orderItem.item.id.startsWith("side")
-              ? "sides"
-              : "desserts"
-
-        const cheaperAlternatives = menuData[category]
-          .filter((item) => item.price < orderItem.item.price)
-          .sort((a, b) => b.price - a.price) // Get the most expensive cheaper alternative
-          .slice(0, 1)
-
-        if (cheaperAlternatives.length > 0) {
-          const alternative = cheaperAlternatives[0]
-          const savings = (orderItem.item.price - alternative.price) * orderItem.quantity
-          response += `- Consider replacing ${orderItem.item.name} with ${alternative.name} to save $${savings.toFixed(2)}\n`
-        }
-      })
-    }
-
-    response += "\nJust let me know if you'd like to add any of these items to your order."
+    response += "\n\nWould you like to know more about any of these dishes? I can tell you about their ingredients, portion sizes, or suggest other options!"
 
     return response
   }
@@ -1162,100 +989,73 @@ Instructions:
   }
 
   return (
-    <Card 
-      className={`w-full transition-all duration-500 ease-in-out ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`} 
-      ref={chatContainerRef}
-    >
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-        <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5 text-primary-foreground">
-              <path d="M12 2a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2 2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z" />
-              <path d="M12 8v8" />
-              <path d="M5 3a2 2 0 0 0-2 2v2c0 1.1.9 2 2 2h2a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2H5Z" />
-              <path d="M17 3a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h2Z" />
-              <path d="M12 18a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-2a2 2 0 0 1 2-2Z" />
-              <path d="M5 15a2 2 0 0 0-2 2v2c0 1.1.9 2 2 2h2a2 2 0 0 0 2-2v-2a2 2 0 0 0-2-2H5Z" />
-              <path d="M17 15a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2v-2a2 2 0 0 1 2-2h2Z" />
-            </svg>
-          </div>
-          <CardTitle className="text-2xl font-bold">AI Assistant</CardTitle>
+    <div className={`ai-assistant-container ${isVisible ? 'visible' : ''}`}>
+      <div className="ai-assistant">
+        <div className="ai-assistant-header">
+          <h3 className="flex items-center gap-3">
+            <Avatar className="h-8 w-8">
+              <AvatarImage src="/ai-avatar.png" alt="AI Assistant" />
+              <AvatarFallback>AI</AvatarFallback>
+            </Avatar>
+            AI Food Assistant
+          </h3>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            className="hover:bg-muted"
+            aria-label="Close AI Assistant"
+          >
+            <X className="h-5 w-5" />
+          </Button>
         </div>
-        <Button 
-          variant="ghost" 
-          size="icon" 
-          onClick={onClose}
-          className="hover:bg-destructive hover:text-destructive-foreground transition-colors"
-        >
-          <X className="h-4 w-4" />
-        </Button>
-      </CardHeader>
-      <CardContent>
-        <ScrollArea ref={scrollAreaRef} className="h-[400px] w-full rounded-md border p-4">
-          <div className="space-y-4">
-            {messages.map((message: Message, index: number) => (
+        
+        <div className="ai-assistant-content" ref={scrollAreaRef}>
+          <div className="messages">
+            {messages.map((message) => (
               <div
-                key={index}
-                className={`flex items-start space-x-2 ${
-                  message.role === "user" ? "justify-end" : "justify-start"
-                }`}
+                key={message.id}
+                className={`${message.role === "user" ? "user-message" : "ai-message"}`}
               >
-                {message.role === "assistant" && (
-                  <Avatar>
-                    <AvatarImage src="/ai-avatar.png" alt="AI Assistant" />
-                    <AvatarFallback>AI</AvatarFallback>
-                  </Avatar>
-                )}
-                <div
-                  className={`rounded-lg px-4 py-2 ${
-                    message.role === "user"
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-muted"
-                  }`}
-                >
-                  {message.content}
-                </div>
-                {message.role === "user" && (
-                  <Avatar>
-                    <AvatarFallback>U</AvatarFallback>
-                  </Avatar>
-                )}
+                {message.content}
               </div>
             ))}
             {isLoading && (
-              <div className="flex items-center space-x-2">
-                <Avatar>
-                  <AvatarImage src="/ai-avatar.png" alt="AI Assistant" />
-                  <AvatarFallback>AI</AvatarFallback>
-                </Avatar>
-                <div className="rounded-lg bg-muted px-4 py-2">
-                  <div className="flex space-x-2">
-                    <div className="h-2 w-2 animate-bounce rounded-full bg-primary"></div>
-                    <div className="h-2 w-2 animate-bounce rounded-full bg-primary" style={{ animationDelay: "0.2s" }}></div>
-                    <div className="h-2 w-2 animate-bounce rounded-full bg-primary" style={{ animationDelay: "0.4s" }}></div>
-                  </div>
-                </div>
+              <div className="typing-indicator">
+                <span></span>
+                <span></span>
+                <span></span>
               </div>
             )}
           </div>
-        </ScrollArea>
-      </CardContent>
-      <CardFooter>
-        <form onSubmit={handleSubmit} className="flex w-full space-x-2">
+        </div>
+        
+        <form
+          onSubmit={handleSubmit}
+          className="ai-input"
+        >
           <Input
             ref={inputRef}
+            type="text"
+            placeholder="Type your message..."
             value={input}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInput(e.target.value)}
-            placeholder="Ask about your order..."
+            onChange={(e) => setInput(e.target.value)}
             disabled={isLoading}
-            className="flex-1"
           />
-          <Button type="submit" disabled={isLoading}>
-            <Send className="h-4 w-4" />
+          <Button 
+            type="submit" 
+            disabled={!input.trim() || isLoading}
+            aria-label="Send message"
+          >
+            {isLoading ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : (
+              <Send className="h-5 w-5" />
+            )}
           </Button>
         </form>
-      </CardFooter>
-    </Card>
+      </div>
+    </div>
   )
 }
 

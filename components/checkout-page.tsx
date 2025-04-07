@@ -55,7 +55,7 @@ export function CheckoutPage({ order, onBack, onComplete }: CheckoutPageProps) {
           <CardDescription>Complete your order</CardDescription>
         </CardHeader>
         <CardContent className="p-6">
-          <form onSubmit={handleSubmit} className="space-y-6">
+          <form onSubmit={handleSubmit} className="checkout-form">
             <div className="space-y-4">
               <h3 className="text-lg font-medium">Contact Information</h3>
               <div className="grid gap-4">
@@ -85,23 +85,23 @@ export function CheckoutPage({ order, onBack, onComplete }: CheckoutPageProps) {
               <RadioGroup
                 value={paymentMethod}
                 onValueChange={(value) => setPaymentMethod(value as "card" | "cash" | "wallet")}
-                className="space-y-2"
+                className="payment-methods"
               >
-                <div className="flex items-center space-x-2 border rounded-md p-3 cursor-pointer hover:bg-amber-50">
+                <div className={`payment-method-option ${paymentMethod === 'card' ? 'selected' : ''}`}>
                   <RadioGroupItem value="card" id="card" />
                   <Label htmlFor="card" className="flex items-center cursor-pointer">
                     <CreditCard className="h-4 w-4 mr-2" />
                     Credit/Debit Card
                   </Label>
                 </div>
-                <div className="flex items-center space-x-2 border rounded-md p-3 cursor-pointer hover:bg-amber-50">
+                <div className={`payment-method-option ${paymentMethod === 'cash' ? 'selected' : ''}`}>
                   <RadioGroupItem value="cash" id="cash" />
                   <Label htmlFor="cash" className="flex items-center cursor-pointer">
                     <Banknote className="h-4 w-4 mr-2" />
                     Cash on Delivery
                   </Label>
                 </div>
-                <div className="flex items-center space-x-2 border rounded-md p-3 cursor-pointer hover:bg-amber-50">
+                <div className={`payment-method-option ${paymentMethod === 'wallet' ? 'selected' : ''}`}>
                   <RadioGroupItem value="wallet" id="wallet" />
                   <Label htmlFor="wallet" className="flex items-center cursor-pointer">
                     <Wallet className="h-4 w-4 mr-2" />
@@ -111,19 +111,21 @@ export function CheckoutPage({ order, onBack, onComplete }: CheckoutPageProps) {
               </RadioGroup>
 
               {paymentMethod === "card" && (
-                <div className="space-y-4 border rounded-md p-4 bg-amber-50">
-                  <div className="space-y-2">
-                    <Label htmlFor="card-number">Card Number</Label>
-                    <Input id="card-number" placeholder="1234 5678 9012 3456" required />
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
+                <div className="card-details">
+                  <div className="space-y-4">
                     <div className="space-y-2">
-                      <Label htmlFor="expiry">Expiry Date</Label>
-                      <Input id="expiry" placeholder="MM/YY" required />
+                      <Label htmlFor="card-number">Card Number</Label>
+                      <Input id="card-number" placeholder="1234 5678 9012 3456" required />
                     </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="cvv">CVV</Label>
-                      <Input id="cvv" placeholder="123" required />
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="expiry">Expiry Date</Label>
+                        <Input id="expiry" placeholder="MM/YY" required />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="cvv">CVV</Label>
+                        <Input id="cvv" placeholder="123" required />
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -143,10 +145,10 @@ export function CheckoutPage({ order, onBack, onComplete }: CheckoutPageProps) {
           <CardDescription>Review your order before payment</CardDescription>
         </CardHeader>
         <CardContent className="p-6">
-          <div className="space-y-4">
+          <div className="order-summary-checkout">
             <div className="space-y-2">
               {order.items.map((item) => (
-                <div key={item.item.id} className="flex justify-between py-2 border-b">
+                <div key={item.item.id} className="item">
                   <div>
                     <span className="font-medium">{item.quantity}x </span>
                     {item.item.name}
@@ -157,15 +159,15 @@ export function CheckoutPage({ order, onBack, onComplete }: CheckoutPageProps) {
             </div>
 
             <div className="space-y-2 pt-2">
-              <div className="flex justify-between">
+              <div className="item">
                 <span>Subtotal</span>
                 <span>${order.total.toFixed(2)}</span>
               </div>
-              <div className="flex justify-between">
+              <div className="item">
                 <span>Tax (8%)</span>
                 <span>${tax.toFixed(2)}</span>
               </div>
-              <div className="flex justify-between font-bold text-lg pt-2 border-t">
+              <div className="total">
                 <span>Total</span>
                 <span>${total.toFixed(2)}</span>
               </div>
