@@ -79,10 +79,6 @@ export function OrderSummary({ order, onAddItem, onRemoveItem, onCheckout }: Ord
         >
           Checkout
         </button>
-        
-        <button className="ai-assistance-button">
-          Get AI Assistance
-        </button>
       </div>
     </div>
   )

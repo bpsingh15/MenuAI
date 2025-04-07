@@ -211,7 +211,7 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
                                 userMessage.toLowerCase().includes('delete') || 
                                 userMessage.toLowerCase().includes('replace') || 
                                 userMessage.toLowerCase().includes('change') ||
-                                userMessage.toLowerCase().includes('update');
+                                userMessage.includes('update');
         
         // Only process actions if the user is explicitly asking to modify their order
         if (isModifyingOrder) {
@@ -728,9 +728,71 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
 
   // Generate dietary response
   const generateDietaryResponse = (question: string, order: Order, menuData: Record<string, MenuItem[]>): string => {
+    const lowerQuestion = question.toLowerCase()
+    const isAskingAboutOrder = lowerQuestion.includes('order') || lowerQuestion.includes('cart') || lowerQuestion.includes('current')
+    
+    // First, analyze the current order if the user is asking about it
+    if (isAskingAboutOrder && order.items.length > 0) {
+      const dietaryIssues: string[] = []
+      const safeItems: string[] = []
+      
+      // Determine which dietary restriction we're checking for
+      let dietaryCheck = {
+        type: '',
+        friendly: false
+      }
+      
+      if (lowerQuestion.includes('gluten')) {
+        dietaryCheck = { type: 'gluten', friendly: false }
+      } else if (lowerQuestion.includes('vegan')) {
+        dietaryCheck = { type: 'vegan', friendly: true }
+      } else if (lowerQuestion.includes('vegetarian')) {
+        dietaryCheck = { type: 'vegetarian', friendly: true }
+      } else if (lowerQuestion.includes('halal')) {
+        dietaryCheck = { type: 'halal', friendly: true }
+      } else if (lowerQuestion.includes('kosher')) {
+        dietaryCheck = { type: 'kosher', friendly: true }
+      }
+      
+      // Analyze each item in the order
+      order.items.forEach(orderItem => {
+        const info = foodInformation[orderItem.item.id]
+        if (info) {
+          if (dietaryCheck.friendly) {
+            // For dietary preferences (vegan, vegetarian, etc.)
+            if (info.dietary[dietaryCheck.type as keyof typeof info.dietary]) {
+              safeItems.push(orderItem.item.name)
+            } else {
+              dietaryIssues.push(orderItem.item.name)
+            }
+          } else {
+            // For allergens/restrictions (gluten, etc.)
+            if (info.allergens[dietaryCheck.type as keyof typeof info.allergens]) {
+              dietaryIssues.push(orderItem.item.name)
+            } else {
+              safeItems.push(orderItem.item.name)
+            }
+          }
+        }
+      })
+      
+      // Generate a context-aware response
+      let response = ''
+      if (dietaryIssues.length > 0) {
+        response = `In your current order, ${dietaryIssues.join(', ')} ${dietaryIssues.length === 1 ? 'is' : 'are'} not ${dietaryCheck.friendly ? `${dietaryCheck.type}-friendly` : `${dietaryCheck.type}-free`}. `
+        if (safeItems.length > 0) {
+          response += `However, ${safeItems.join(', ')} ${safeItems.length === 1 ? 'is' : 'are'} ${dietaryCheck.friendly ? `${dietaryCheck.type}-friendly` : `${dietaryCheck.type}-free`}. `
+        }
+        response += `Would you like me to suggest some alternatives for the ${dietaryIssues.length === 1 ? 'item' : 'items'} that don't meet your dietary needs?`
+      } else if (safeItems.length > 0) {
+        response = `Good news! All the items in your order (${safeItems.join(', ')}) are ${dietaryCheck.friendly ? `${dietaryCheck.type}-friendly` : `${dietaryCheck.type}-free`}. Would you like to explore more options that match your dietary preferences?`
+      }
+      
+      if (response) return response
+    }
+
     // Check if the question is about a specific item
     const itemMatch = findItemInQuestion(question, menuData)
-
     if (itemMatch) {
       const foodInfo = foodInformation[itemMatch.id]
       if (foodInfo) {
@@ -741,48 +803,79 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
         if (foodInfo.dietary.halal) dietaryInfo.push("halal")
         if (foodInfo.dietary.kosher) dietaryInfo.push("kosher")
 
+        let response = ''
         if (dietaryInfo.length > 0) {
-          return `Great news! The ${itemMatch.name} is ${dietaryInfo.join(" and ")}-friendly. Would you like to know more about its ingredients or nutritional information?`
+          response = `The ${itemMatch.name} is ${dietaryInfo.join(" and ")}-friendly. `
         } else {
-          return `The ${itemMatch.name} doesn't specifically meet vegetarian, vegan, keto, halal, or kosher requirements. Would you like me to suggest some alternatives that match your dietary preferences?`
+          response = `The ${itemMatch.name} doesn't specifically meet vegetarian, vegan, keto, halal, or kosher requirements. `
         }
-      }
-    }
-
-    // Check if the question is about a specific diet
-    let dietType = ""
-    if (question.toLowerCase().includes("vegetarian")) dietType = "vegetarian"
-    else if (question.toLowerCase().includes("vegan")) dietType = "vegan"
-    else if (question.toLowerCase().includes("keto")) dietType = "keto"
-    else if (question.toLowerCase().includes("halal")) dietType = "halal"
-    else if (question.toLowerCase().includes("kosher")) dietType = "kosher"
-
-    if (dietType) {
-      const suitableItems = allMenuItems.filter(item => {
-        const info = foodInformation[item.id]
-        return info && info.dietary[dietType as keyof typeof info.dietary]
-      })
-
-      if (suitableItems.length > 0) {
-        let response = `Here are some ${dietType} options I think you'll love:\n\n`
-        suitableItems.forEach(item => {
-          response += `• ${item.name} - ${item.description}\n`
-        })
-        response += `\nWould you like to know more about any of these dishes?`
+        
+        // Add context-aware suggestions
+        if (order.items.length > 0) {
+          response += `Would you like me to check if it's compatible with the other items in your order or suggest alternatives?`
+        } else {
+          response += `Would you like to know more about its ingredients or explore similar dishes that match your dietary preferences?`
+        }
         return response
-      } else {
-        return `I apologize, but I don't see any specifically marked ${dietType} options on our menu. However, I can help you find dishes that might be adaptable to your needs or suggest alternatives. What kind of food do you enjoy?`
       }
     }
 
-    return `I'd be happy to help you find dishes that match your dietary preferences! Are you looking for vegetarian, vegan, keto, halal, or kosher options? Or do you have other dietary needs I can help with?`
+    // If no specific context, provide a helpful response
+    if (order.items.length > 0) {
+      return `I can help you check your current order for any dietary restrictions or find additional dishes that match your preferences. What specific dietary requirements should I look for?`
+    } else {
+      return `I'd be happy to help you find dishes that match your dietary preferences! Are you looking for vegetarian, vegan, gluten-free, or other specific options? I can guide you to the perfect dishes for your needs.`
+    }
   }
 
   // Generate allergen response
   const generateAllergenResponse = (question: string, order: Order, menuData: Record<string, MenuItem[]>): string => {
+    const lowerQuestion = question.toLowerCase()
+    const isAskingAboutOrder = lowerQuestion.includes('order') || lowerQuestion.includes('cart') || lowerQuestion.includes('current')
+    
+    // First, analyze the current order if the user is asking about it
+    if (isAskingAboutOrder && order.items.length > 0) {
+      const allergenIssues = new Map<string, string[]>()
+      const safeItems: string[] = []
+      
+      // Analyze each item in the order
+      order.items.forEach(orderItem => {
+        const info = foodInformation[orderItem.item.id]
+        if (info) {
+          let hasAllergens = false
+          Object.entries(info.allergens).forEach(([allergen, present]) => {
+            if (present) {
+              hasAllergens = true
+              if (!allergenIssues.has(allergen)) {
+                allergenIssues.set(allergen, [])
+              }
+              allergenIssues.get(allergen)!.push(orderItem.item.name)
+            }
+          })
+          if (!hasAllergens) {
+            safeItems.push(orderItem.item.name)
+          }
+        }
+      })
+      
+      // Generate a context-aware response
+      if (allergenIssues.size > 0) {
+        let response = `I've checked your order for allergens. Here's what I found:\n\n`
+        allergenIssues.forEach((items, allergen) => {
+          response += `• ${items.join(', ')} contain${items.length === 1 ? 's' : ''} ${allergen}\n`
+        })
+        if (safeItems.length > 0) {
+          response += `\nHowever, ${safeItems.join(', ')} ${safeItems.length === 1 ? 'is' : 'are'} free from common allergens. `
+        }
+        response += `\nWould you like me to suggest some allergen-free alternatives for any of these items?`
+        return response
+      } else if (safeItems.length > 0) {
+        return `Good news! All the items in your current order (${safeItems.join(', ')}) are free from common allergens. Would you like to explore more allergen-free options?`
+      }
+    }
+
     // Check if the question is about a specific item
     const itemMatch = findItemInQuestion(question, menuData)
-
     if (itemMatch) {
       const foodInfo = foodInformation[itemMatch.id]
       if (foodInfo) {
@@ -794,40 +887,32 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
         if (foodInfo.allergens.soy) allergens.push("soy")
         if (foodInfo.allergens.eggs) allergens.push("eggs")
 
+        let response = ''
         if (allergens.length > 0) {
-          return `I should let you know that the ${itemMatch.name} contains ${allergens.join(", ")}. Would you like me to suggest some alternative options without these allergens?`
+          response = `I should let you know that the ${itemMatch.name} contains ${allergens.join(", ")}. `
+          if (order.items.length > 0) {
+            response += `Would you like me to check how it compares with the allergens in your current order items or suggest alternatives?`
+          } else {
+            response += `Would you like me to suggest some similar dishes without these allergens?`
+          }
         } else {
-          return `Good news! The ${itemMatch.name} doesn't contain any common allergens. Would you like to know more about its ingredients?`
+          response = `Good news! The ${itemMatch.name} is free from common allergens. `
+          if (order.items.length > 0) {
+            response += `It should be compatible with the other items in your order. Would you like to know more about its ingredients?`
+          } else {
+            response += `Would you like to know more about its ingredients or explore other allergen-free options?`
+          }
         }
-      }
-    }
-
-    // Check if the question is about a specific allergen
-    let allergenType = ""
-    if (question.toLowerCase().includes("gluten")) allergenType = "gluten"
-    else if (question.toLowerCase().includes("dairy")) allergenType = "dairy"
-    else if (question.toLowerCase().includes("nut")) allergenType = "nuts"
-    else if (question.toLowerCase().includes("shellfish")) allergenType = "shellfish"
-    else if (question.toLowerCase().includes("soy")) allergenType = "soy"
-    else if (question.toLowerCase().includes("egg")) allergenType = "eggs"
-
-    if (allergenType) {
-      const safeItems = allMenuItems.filter(item => {
-        const info = foodInformation[item.id]
-        return info && !info.allergens[allergenType as keyof typeof info.allergens]
-      })
-
-      if (safeItems.length > 0) {
-        let response = `Here are some delicious options that are ${allergenType}-free:\n\n`
-        safeItems.forEach(item => {
-          response += `• ${item.name} - ${item.description}\n`
-        })
-        response += `\nWould you like me to tell you more about any of these dishes?`
         return response
       }
     }
 
-    return `I want to make sure you have a safe dining experience! Could you tell me which allergens you need to avoid? I can help you find dishes that are free from common allergens like gluten, dairy, nuts, shellfish, soy, or eggs.`
+    // If no specific context, provide a helpful response
+    if (order.items.length > 0) {
+      return `I'll be happy to check your current order for any allergens. Which specific allergens would you like me to look for? I can help identify items containing common allergens like gluten, dairy, nuts, shellfish, soy, or eggs.`
+    } else {
+      return `I want to help ensure you have a safe dining experience! Could you tell me which allergens you need to avoid? I can help you find dishes that are free from specific allergens and suggest alternatives that match your needs.`
+    }
   }
 
   // Generate ingredient response
@@ -1058,4 +1143,5 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
     </div>
   )
 }
+
 
