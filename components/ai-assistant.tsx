@@ -42,7 +42,7 @@ export function AIAssistant({ order, onClose, menuData, onAddItem, onRemoveItem 
       {
         id: "1",
         role: "assistant",
-        content: `Hi there! I see you have ${order.items.length} items in your order totaling $${order.total.toFixed(2)}. How can I help you with your order today?`,
+        content: `Hi there! I see you have ${order.items.length} items in your order totaling $${order.total.toFixed(2)}. To help you better, could you tell me how many people this order is for?`,
       },
     ]
     setMessages(initialMessages)
